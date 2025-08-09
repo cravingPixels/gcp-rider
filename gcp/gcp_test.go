@@ -2,71 +2,52 @@ package gcp
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
-	compute "cloud.google.com/go/compute/apiv1"
-	"cloud.google.com/go/compute/apiv1/computepb"
-	"google.golang.org/api/iterator"
+	"google.golang.org/api/option"
 )
 
-// mockInstancesAPI is a mock implementation of the instancesAPI interface.
-type mockInstancesAPI struct {
-	// A function we can override in each test to simulate different responses.
-	AggregatedListFunc func(ctx context.Context, req *computepb.AggregatedListInstancesRequest) *compute.InstancesIterator
-}
-
-func (m *mockInstancesAPI) AggregatedList(ctx context.Context, req *computepb.AggregatedListInstancesRequest) *compute.InstancesIterator {
-	return m.AggregatedListFunc(ctx, req)
-}
-
-// mockPager is a mock implementation of the iterator.Pager interface.
-type mockPager struct {
-	items []*computepb.InstancesScopedList
-	err   error
-	index int
-}
-
-func (p *mockPager) NextPage(pageInfo *iterator.PageInfo, dst interface{}) (string, error) {
-	if p.err != nil {
-		return "", p.err
-	}
-	if p.index >= len(p.items) {
-		return iterator.Done, nil
-	}
-	// This is a bit of a hack to get the items into the iterator's internal state.
-	reflect.ValueOf(dst).Elem().Set(reflect.ValueOf(p.items))
-	p.index = len(p.items) // Mark as done for the next call
-	return "next-page-token", nil
-}
-
-func TestFetchInstances_Success(t *testing.T) {
-	vm1Name, vm1Zone := "instance-1", "us-central1-a"
-	vm2Name, vm2Zone := "instance-2", "europe-west1-b"
-	zoneURL1 := "https://www.googleapis.com/compute/v1/projects/proj/zones/" + vm1Zone
-	zoneURL2 := "https://www.googleapis.com/compute/v1/projects/proj/zones/" + vm2Zone
-
-	mockAPI := &mockInstancesAPI{
-		AggregatedListFunc: func(ctx context.Context, req *computepb.AggregatedListInstancesRequest) *compute.InstancesIterator {
-			return &compute.InstancesIterator{
-				Pager: &mockPager{
-					items: []*computepb.InstancesScopedList{
+func TestFetchInstances_Success_WithMockServer(t *testing.T) {
+	// The mock server will return a canned JSON response that mimics the real API.
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// This is a sample response for a VM list.
+		jsonResponse := `{
+			"items": {
+				"zones/us-central1-a": {
+					"instances": [
 						{
-							Instances: []*computepb.Instance{
-								{Name: &vm1Name, Zone: &zoneURL1},
-								{Name: &vm2Name, Zone: &zoneURL2},
-							},
-						},
-					},
+							"name": "instance-1",
+							"zone": "https://www.googleapis.com/compute/v1/projects/proj/zones/us-central1-a"
+						}
+					]
 				},
+				"zones/europe-west1-b": {
+					"instances": [
+						{
+							"name": "instance-2",
+							"zone": "https://www.googleapis.com/compute/v1/projects/proj/zones/europe-west1-b"
+						}
+					]
+				}
 			}
-		},
+		}`
+		fmt.Fprintln(w, jsonResponse)
+	}))
+	defer mockServer.Close()
+
+	// Create a client that connects to our mock server instead of the real GCP.
+	// We use `option.WithEndpoint` to point the client to our test server.
+	ctx := context.Background()
+	client, err := NewClient(ctx, option.WithEndpoint(mockServer.URL), option.WithoutAuthentication())
+	if err != nil {
+		t.Fatalf("Failed to create client for test: %v", err)
 	}
 
-	client := &Client{api: mockAPI}
-	instances, err := client.FetchInstances(context.Background(), "test-project")
-
+	instances, err := client.FetchInstances(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("FetchInstances() returned an unexpected error: %v", err)
 	}
@@ -76,29 +57,41 @@ func TestFetchInstances_Success(t *testing.T) {
 		{Name: "instance-2", Zone: "europe-west1-b"},
 	}
 
-	if !reflect.DeepEqual(instances, expected) {
-		t.Errorf("expected instances %v, got %v", expected, instances)
+	// The order of items from a map is not guaranteed, so we need to sort for a stable test.
+	// For this test, we'll just check the length and content in a flexible way.
+	if len(instances) != len(expected) {
+		t.Fatalf("expected %d instances, got %d", len(expected), len(instances))
+	}
+
+	// A simple check to see if the expected instances are present.
+	foundCount := 0
+	for _, exp := range expected {
+		for _, got := range instances {
+			if reflect.DeepEqual(exp, got) {
+				foundCount++
+			}
+		}
+	}
+	if foundCount != len(expected) {
+		t.Errorf("did not find all expected instances. Expected: %v, Got: %v", expected, instances)
 	}
 }
 
-func TestFetchInstances_Error(t *testing.T) {
-	expectedErr := errors.New("GCP API error")
-	mockAPI := &mockInstancesAPI{
-		AggregatedListFunc: func(ctx context.Context, req *computepb.AggregatedListInstancesRequest) *compute.InstancesIterator {
-			return &compute.InstancesIterator{
-				Pager: &mockPager{err: expectedErr},
-			}
-		},
+func TestFetchInstances_Error_WithMockServer(t *testing.T) {
+	// This mock server will return an error status code.
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}))
+	defer mockServer.Close()
+
+	ctx := context.Background()
+	client, err := NewClient(ctx, option.WithEndpoint(mockServer.URL), option.WithoutAuthentication())
+	if err != nil {
+		t.Fatalf("Failed to create client for test: %v", err)
 	}
 
-	client := &Client{api: mockAPI}
-	_, err := client.FetchInstances(context.Background(), "test-project")
-
+	_, err = client.FetchInstances(ctx, "test-project")
 	if err == nil {
 		t.Fatal("FetchInstances() did not return an error when one was expected")
-	}
-
-	if !errors.Is(err, expectedErr) {
-		t.Fatalf("expected error containing '%v', got '%v'", expectedErr, err)
 	}
 }

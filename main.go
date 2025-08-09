@@ -24,6 +24,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create GCP client: %v", err)
 	}
+	defer gcpClient.Close()
 
 	// Create the TUI model, injecting the GCP client as a dependency.
 	tuiModel := tui.NewModel(gcpClient, projectID)

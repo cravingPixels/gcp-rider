@@ -9,6 +9,7 @@ import (
 	compute "cloud.google.com/go/compute/apiv1"
 	"cloud.google.com/go/compute/apiv1/computepb"
 	"google.golang.org/api/iterator"
+	"google.golang.org/api/option"
 )
 
 // Instance holds the essential information for a GCP VM instance.
@@ -17,24 +18,18 @@ type Instance struct {
 	Zone string
 }
 
-// instancesAPI is an interface that abstracts the GCP compute client.
-// This allows us to mock the client in tests.
-type instancesAPI interface {
-	AggregatedList(context.Context, *computepb.AggregatedListInstancesRequest) *compute.InstancesIterator
-}
-
 // Client is a wrapper around the GCP compute client.
 type Client struct {
-	api instancesAPI
+	computeClient *compute.InstancesClient
 }
 
 // NewClient creates a new real GCP client.
-func NewClient(ctx context.Context) (*Client, error) {
-	c, err := compute.NewInstancesRESTClient(ctx)
+func NewClient(ctx context.Context, opts ...option.ClientOption) (*Client, error) {
+	c, err := compute.NewInstancesRESTClient(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create instances client: %w", err)
 	}
-	return &Client{api: c}, nil
+	return &Client{computeClient: c}, nil
 }
 
 // FetchInstances retrieves a list of VM instances from a given project.
@@ -42,7 +37,7 @@ func (c *Client) FetchInstances(ctx context.Context, projectID string) ([]Instan
 	req := &computepb.AggregatedListInstancesRequest{
 		Project: projectID,
 	}
-	it := c.api.AggregatedList(ctx, req)
+	it := c.computeClient.AggregatedList(ctx, req)
 	var vms []Instance
 	for {
 		pair, err := it.Next()
@@ -60,4 +55,9 @@ func (c *Client) FetchInstances(ctx context.Context, projectID string) ([]Instan
 		}
 	}
 	return vms, nil
+}
+
+// Close closes the underlying client connection.
+func (c *Client) Close() error {
+	return c.computeClient.Close()
 }

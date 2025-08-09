@@ -22,6 +22,11 @@ func (m *mockGcpClient) FetchInstances(ctx context.Context, projectID string) ([
 	return m.instances, nil
 }
 
+// Close is a dummy method to satisfy the gcpClient interface.
+func (m *mockGcpClient) Close() error {
+	return nil
+}
+
 func TestUpdate_VMFetchSuccess(t *testing.T) {
 	client := &mockGcpClient{
 		instances: []gcp.Instance{{Name: "vm-1", Zone: "z-1"}},
@@ -59,8 +64,13 @@ func TestUpdate_VMFetchError(t *testing.T) {
 	if updatedModel.err == nil {
 		t.Error("expected an error but got nil")
 	}
-	if !errors.Is(updatedModel.err, expectedErr) {
-		t.Errorf("expected error '%v', got '%v'", expectedErr, updatedModel.err)
+
+	var errMsg errMsg
+	if !errors.As(updatedModel.err, &errMsg) {
+		t.Fatalf("expected error of type errMsg, got %T", updatedModel.err)
+	}
+	if errMsg.err.Error() != expectedErr.Error() {
+		t.Errorf("expected error message '%s', got '%s'", expectedErr.Error(), errMsg.err.Error())
 	}
 }
 

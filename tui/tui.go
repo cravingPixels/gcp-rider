@@ -13,9 +13,9 @@ import (
 )
 
 // gcpClient is an interface that defines the methods we need from the gcp package.
-// This allows us to use a mock client in our TUI tests.
 type gcpClient interface {
 	FetchInstances(ctx context.Context, projectID string) ([]gcp.Instance, error)
+	Close() error
 }
 
 // Model represents the state of the TUI application.
