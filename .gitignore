@@ -1,0 +1,5 @@
+# Ignore mise environment files
+.env
+
+# Ignore compiled binaries
+gcp-rider
