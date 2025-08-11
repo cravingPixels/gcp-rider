@@ -18,22 +18,28 @@ type Instance struct {
 	Zone string
 }
 
-// Client is a wrapper around the GCP compute client.
-type Client struct {
+// Client is an interface for a GCP client, allowing for mock implementations.
+type Client interface {
+	FetchInstances(ctx context.Context, projectID string) ([]Instance, error)
+	Close() error
+}
+
+// realClient is the concrete implementation of the Client interface.
+type realClient struct {
 	computeClient *compute.InstancesClient
 }
 
-// NewClient creates a new real GCP client.
-func NewClient(ctx context.Context, opts ...option.ClientOption) (*Client, error) {
+// NewClient creates a new real GCP client that conforms to the Client interface.
+func NewClient(ctx context.Context, opts ...option.ClientOption) (Client, error) {
 	c, err := compute.NewInstancesRESTClient(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create instances client: %w", err)
 	}
-	return &Client{computeClient: c}, nil
+	return &realClient{computeClient: c}, nil
 }
 
 // FetchInstances retrieves a list of VM instances from a given project.
-func (c *Client) FetchInstances(ctx context.Context, projectID string) ([]Instance, error) {
+func (c *realClient) FetchInstances(ctx context.Context, projectID string) ([]Instance, error) {
 	req := &computepb.AggregatedListInstancesRequest{
 		Project: projectID,
 	}
@@ -58,6 +64,6 @@ func (c *Client) FetchInstances(ctx context.Context, projectID string) ([]Instan
 }
 
 // Close closes the underlying client connection.
-func (c *Client) Close() error {
+func (c *realClient) Close() error {
 	return c.computeClient.Close()
 }

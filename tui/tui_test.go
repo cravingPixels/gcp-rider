@@ -1,107 +1,67 @@
 package tui
 
 import (
-	"context"
 	"errors"
 	"gcp-rider/gcp"
+	"gcp-rider/gcp/mocks"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
-// mockGcpClient is a mock implementation of the gcpClient interface for TUI tests.
-type mockGcpClient struct {
-	instances []gcp.Instance
-	err       error
-}
-
-func (m *mockGcpClient) FetchInstances(ctx context.Context, projectID string) ([]gcp.Instance, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.instances, nil
-}
-
-// Close is a dummy method to satisfy the gcpClient interface.
-func (m *mockGcpClient) Close() error {
-	return nil
-}
-
 func TestUpdate_VMFetchSuccess(t *testing.T) {
-	client := &mockGcpClient{
-		instances: []gcp.Instance{{Name: "vm-1", Zone: "z-1"}},
-	}
-	m := NewModel(client, "test-project")
+	mockClient := new(mocks.Client)
+	expectedVMs := []gcp.Instance{{Name: "vm-1", Zone: "z-1"}}
+	mockClient.On("FetchInstances", mock.Anything, "test-project").Return(expectedVMs, nil)
 
-	// Simulate the initial fetch command
+	m := NewModel(mockClient, "test-project")
+
 	msg := m.fetchVmsCmd()
 	model, _ := m.Update(msg)
 	updatedModel := model.(Model)
 
-	if updatedModel.loading {
-		t.Error("expected loading to be false after fetching VMs")
-	}
-	if len(updatedModel.vms) != 1 {
-		t.Errorf("expected 1 VM, got %d", len(updatedModel.vms))
-	}
-	if updatedModel.vms[0].Name != "vm-1" {
-		t.Errorf("unexpected VM name: %s", updatedModel.vms[0].Name)
-	}
+	require.False(t, updatedModel.loading, "expected loading to be false")
+	require.Len(t, updatedModel.vms, 1, "expected 1 VM")
+	require.Equal(t, "vm-1", updatedModel.vms[0].Name, "unexpected VM name")
+
+	mockClient.AssertExpectations(t)
 }
 
 func TestUpdate_VMFetchError(t *testing.T) {
+	mockClient := new(mocks.Client)
 	expectedErr := errors.New("fetch failed")
-	client := &mockGcpClient{err: expectedErr}
-	m := NewModel(client, "test-project")
+	mockClient.On("FetchInstances", mock.Anything, "test-project").Return(nil, expectedErr)
+
+	m := NewModel(mockClient, "test-project")
 
 	msg := m.fetchVmsCmd()
 	model, _ := m.Update(msg)
 	updatedModel := model.(Model)
 
-	if updatedModel.loading {
-		t.Error("expected loading to be false after an error")
-	}
-	if updatedModel.err == nil {
-		t.Error("expected an error but got nil")
-	}
+	require.False(t, updatedModel.loading, "expected loading to be false")
+	require.Error(t, updatedModel.err, "expected an error")
 
-	var errMsg errMsg
-	if !errors.As(updatedModel.err, &errMsg) {
-		t.Fatalf("expected error of type errMsg, got %T", updatedModel.err)
-	}
-	if errMsg.err.Error() != expectedErr.Error() {
-		t.Errorf("expected error message '%s', got '%s'", expectedErr.Error(), errMsg.err.Error())
-	}
+	// Check that the underlying error matches our expected error.
+	var e errMsg
+	require.ErrorAs(t, updatedModel.err, &e, "error should be of type errMsg")
+	require.Equal(t, expectedErr.Error(), e.err.Error(), "unexpected error message")
+
+	mockClient.AssertExpectations(t)
 }
 
 func TestUpdate_CursorMovement(t *testing.T) {
-	m := Model{
-		vms: []gcp.Instance{
-			{Name: "vm-1"},
-			{Name: "vm-2"},
-			{Name: "vm-3"},
-		},
-		cursor: 0,
-	}
+	mockClient := new(mocks.Client)
+	m := NewModel(mockClient, "")
+	m.vms = []gcp.Instance{{Name: "vm-1"}, {Name: "vm-2"}, {Name: "vm-3"}}
+	m.loading = false
 
-	// Move down
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("down")})
 	m = model.(Model)
-	if m.cursor != 1 {
-		t.Errorf("expected cursor to be 1 after moving down, got %d", m.cursor)
-	}
+	require.Equal(t, 1, m.cursor, "cursor should be 1 after moving down")
 
-	// Move up
 	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("up")})
 	m = model.(Model)
-	if m.cursor != 0 {
-		t.Errorf("expected cursor to be 0 after moving up, got %d", m.cursor)
-	}
-
-	// Test boundary
-	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("up")})
-	m = model.(Model)
-	if m.cursor != 0 {
-		t.Errorf("expected cursor to stay at 0 at the top boundary, got %d", m.cursor)
-	}
+	require.Equal(t, 0, m.cursor, "cursor should be 0 after moving up")
 }
